@@ -6,6 +6,6 @@ export interface DemoLogin { label: string; email: string; password: string }
 export const DEMO_ORG = 'marichilabs-hr'
 export const DEMO_LOGINS: DemoLogin[] = ([
   { label: 'HR / Admin', email: 'hanumant@marichilabs.com', password: 'Marichi@Hr2026' }, // Hanumant Shukla
-  { label: 'Manager', email: 'meera@marichilabs.com', password: 'Marichi@Mgr2026' }, // Meera Iyer (team: Rohan, Sneha)
+  { label: 'Manager', email: 'meera@marichilabs.com', password: 'MeeraIyer@123' }, // Meera Iyer (team: Rohan, Sneha)
   { label: 'Employee', email: 'rohan@marichilabs.com', password: 'Marichi@Emp2026' }, // Rohan Deshmukh (reports to Meera)
 ] as DemoLogin[]).filter((d) => d.password)
