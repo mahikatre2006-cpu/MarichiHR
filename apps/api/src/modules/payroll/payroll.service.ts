@@ -322,7 +322,8 @@ export const payrollService = {
 
     if (dto.offCycle && !dto.reason?.trim()) throw new AppError('Say what the off-cycle run is for', 400)
     if (dto.correctsCycleId && !(await prisma.payrollCycle.findFirst({ where: { id: dto.correctsCycleId, tenantId, status: { in: ['disbursed', 'locked'] } } }))) throw new AppError('Corrections are for a run that was already paid', 400)
-    const overlap = dto.offCycle ? null : await repo.findOverlappingCycle(tenantId, start, end)
+    if (dto.legalEntityId && !(await prisma.legalEntity.findFirst({ where: { id: dto.legalEntityId, tenantId, active: true } }))) throw new AppError('Legal entity not found', 404)
+    const overlap = dto.offCycle ? null : await repo.findOverlappingCycle(tenantId, start, end, dto.legalEntityId)
     if (overlap) {
       throw new AppError(
         `This period overlaps an existing cycle (${dstr(overlap.payPeriodStart)} to ${dstr(overlap.payPeriodEnd)}, ${overlap.status})`,
@@ -337,6 +338,7 @@ export const payrollService = {
       offCycle: !!dto.offCycle,
       reason: dto.reason?.trim() || null,
       correctsCycleId: dto.correctsCycleId ?? null,
+      legalEntityId: dto.legalEntityId ?? null,
     } as any)
     await repo.createAudit({ tenantId, userId, action: 'PAYROLL_CYCLE_CREATED', entityType: 'payroll_cycle', entityId: cycle.id, newValue: dto })
     return cycle
@@ -424,7 +426,7 @@ export const payrollService = {
     try {
       await repo.deletePayslipsForCycle(cycleId)
 
-      const employees = await repo.listPayrollEmployees(tenantId)
+      const employees = await repo.listPayrollEmployees(tenantId, cycle.legalEntityId)
       const cycleInputs = await repo.listCycleInputs(cycleId)
       const inputTypes = await repo.listInputTypes(tenantId)
       const inputCodes = inputTypes.map((t) => t.code)
@@ -436,20 +438,20 @@ export const payrollService = {
       })
       const exitByEmployee = new Map(exits.map((x) => [x.employeeId, dstr(x.lastWorkingDate)]))
 
-      for (const emp of employees) {
+      const one = async (emp: (typeof employees)[number]) => {
         const name = `${emp.firstName} ${emp.lastName}`
         const exitDay = exitByEmployee.get(emp.id)
         if (exitDay) {
           skipped.push({ employeeId: emp.id, employeeCode: emp.employeeCode, name, reason: `Exiting on ${exitDay}: paid through the full & final settlement` })
-          continue
+          return
         }
         try {
           // Off-cycle runs pay only the inputs added to them; people without any are left out quietly
-          if (cycle.offCycle && !cycleInputs.some((i: any) => i.employeeId === emp.id)) continue
+          if (cycle.offCycle && !cycleInputs.some((i: any) => i.employeeId === emp.id)) return
           const out: any = cycle.offCycle ? await offCyclePayslip(emp, cycle, cycleInputs) : await computeEmployeePayslip(emp, cycle, cycleInputs, inputCodes)
           if (out.skip) {
             skipped.push({ employeeId: emp.id, employeeCode: emp.employeeCode, name, reason: out.skip })
-            continue
+            return
           }
           await repo.createPayslip(out.payslip)
           processed++
@@ -458,6 +460,12 @@ export const payrollService = {
           skipped.push({ employeeId: emp.id, employeeCode: emp.employeeCode, name, reason: err.message })
         }
       }
+      // People are independent: several are worked out at once (each waits on the database most of the time).
+      // ponytail: fixed pool of PAYROLL_CONCURRENCY (default 8, below Prisma's connection limit); a queue job with
+      // progress if runs ever exceed a few minutes.
+      const pool = Math.max(1, Number(process.env.PAYROLL_CONCURRENCY) || 8)
+      let next = 0
+      await Promise.all(Array.from({ length: Math.min(pool, employees.length) }, async () => { while (next < employees.length) await one(employees[next++]) }))
 
       await reapplyOverrides(cycleId) // tax overrides already signed off survive a re-run
       await repo.updateCycle(cycleId, { status: 'review' })

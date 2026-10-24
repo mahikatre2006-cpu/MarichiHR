@@ -6,6 +6,7 @@ import { queryClient } from './lib/queryClient'
 import ProtectedRoute, { SplashScreen } from './components/ProtectedRoute'
 import { ToastProvider } from './components/ui/Toast'
 import { ErrorBoundary } from './pages/system/StatusPages'
+import { useLang } from './lib/i18n'
 
 // Every page is its own chunk: the first load only pulls the shell and the page being opened
 const AppShell = lazy(() => import('./components/AppShell'))
@@ -16,6 +17,7 @@ const HolidaysPage = lazy(() => import('./pages/holidays/HolidaysPage'))
 const AnnouncementsPage = lazy(() => import('./pages/workplace/AnnouncementsPage'))
 const PoliciesPage = lazy(() => import('./pages/workplace/PoliciesPage'))
 const NotificationSettingsPage = lazy(() => import('./pages/NotificationSettingsPage'))
+const PrivacyPage = lazy(() => import('./pages/settings/PrivacyPage'))
 const CommunityPage = lazy(() => import('./pages/workplace/CommunityPage'))
 const ThreadPage = lazy(() => import('./pages/workplace/CommunityPage').then((m) => ({ default: m.ThreadPage })))
 const PayReviewPage = lazy(() => import('./pages/salary/PayReviewPage'))
@@ -79,13 +81,14 @@ const PageLoading = () => <div style={{ padding: 8 }}>{[0, 1, 2].map((i) => <div
 const page = (el: ReactNode) => <Suspense fallback={<PageLoading />}>{el}</Suspense>
 
 export default function App() {
+  const lang = useLang() // labels built in code re-render in the new language
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
           <ToastProvider>
             <BrowserRouter>
-              <Suspense fallback={<SplashScreen />}>
+              <Suspense key={lang} fallback={<SplashScreen />}>
                 <Routes>
                   <Route path="/" element={<LandingPage />} />
                   <Route path="/login" element={<LoginPage />} />
@@ -140,6 +143,7 @@ export default function App() {
                     <Route path="compensation" element={page(guard(<SalarySetupPage />, { roles: STAFF, app: 'payroll' }))} />
                     <Route path="security" element={page(<SecurityPage />)} />
                     <Route path="notifications/settings" element={page(<NotificationSettingsPage />)} />
+                    <Route path="settings/privacy" element={page(<PrivacyPage />)} />
                     <Route path="settings" element={page(guard(<SettingsPage />, { roles: [...ADMINS, 'payroll_admin'] }))} />
                     <Route path="settings/masters" element={page(guard(<MastersPage />, { roles: ADMINS }))} />
                     <Route path="settings/company" element={page(guard(<CompanySettingsPage />, { roles: ADMINS }))} />

@@ -13,6 +13,7 @@ import Popover from './ui/Popover'
 import NotificationBell from './NotificationBell'
 import CommandPalette from './CommandPalette'
 import ProductTour from './ProductTour'
+import LanguagePicker from './LanguagePicker'
 
 const ROLE_LABEL: Record<string, string> = { system_admin: 'Administrator', hr_admin: 'HR administrator', payroll_admin: 'Payroll & finance', compliance_officer: 'Compliance', manager: 'Manager', employee: 'Employee' }
 export const primaryRole = (roles: string[]) => ['system_admin', 'hr_admin', 'payroll_admin', 'compliance_officer', 'manager', 'employee'].find((r) => roles.includes(r)) ?? 'employee'
@@ -110,6 +111,8 @@ export default function AppShell() {
                   {user?.employee && <MenuLink to={`/employees/${user.employee.id}`} icon="user" label="My profile" />}
                   <MenuLink to="/security" icon="lock" label="Security & two-factor" />
                   <MenuLink to="/notifications/settings" icon="bell" label="Notification settings" />
+                  <MenuLink to="/settings/privacy" icon="shield" label="Your data" />
+                  <div style={{ padding: '6px 12px' }}><LanguagePicker signedIn /></div>
                   <button style={s.menuItem} onClick={() => { setMenu(false); startTour() }}><Icon name="compass" size={16} /> Product tour</button>
                   <button style={s.menuItem} onClick={() => { setMenu(false); setPalette(true) }}><Icon name="command" size={16} /> Search &amp; shortcuts</button>
                   <div style={{ height: 1, background: 'var(--line)', margin: '6px 8px' }} />
