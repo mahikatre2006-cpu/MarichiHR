@@ -1386,6 +1386,9 @@ model Policy {
   workLocationIds    String[] @default([])
   requiresAcceptance Boolean  @default(true)
   acceptWithinDays   Int      @default(7)
+  critical           Boolean  @default(false) // the app is blocked (except policies) until the person accepts the current version
+  countries          String[] @default([]) // country variant: only people in these countries (empty = all)
+  ownerUserId        String? // who answers questions on it (e.g. Legal or IT); HR when empty
   active             Boolean  @default(true)
   createdById        String
   createdAt          DateTime @default(now())
@@ -1512,6 +1515,9 @@ model Incentive {
   payrollCycleId    String?
   payrollInputId    String?
   postedAt          DateTime?
+  schemeId          String? // made by a scheme run
+  formula           String? // how the amount was worked out, shown to the person ("why this amount")
+  formulaInputs     Json?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -2324,6 +2330,10 @@ model ForumSpace {
   tenantId    String
   name        String
   description String   @default("")
+  kind             String   @default("company") // company | team (a manager's reporting line) | department (an org unit and below) | news
+  ownerEmployeeId  String? // team space: the manager
+  orgUnitId        String? // department space
+  moderatorUserIds String[] @default([]) // besides HR: the manager of a team space, or named people
   active      Boolean  @default(true)
   createdBy   String
   createdAt   DateTime @default(now())
@@ -2344,6 +2354,8 @@ model ForumThread {
   pinned         Boolean   @default(false)
   locked         Boolean   @default(false)
   hidden         Boolean   @default(false) // moderated away
+  tags           String[]  @default([])
+  attachments    Json      @default("[]") // [{ id, fileName, mimeType, size }] (forum_attachments)
   lastActivityAt DateTime  @default(now())
   createdAt      DateTime  @default(now())
 
@@ -2362,6 +2374,7 @@ model ForumComment {
   authorUserId String
   body         String
   hidden       Boolean  @default(false)
+  attachments  Json     @default("[]")
   createdAt    DateTime @default(now())
 
   thread ForumThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
@@ -2621,4 +2634,187 @@ model TaxOverride {
   @@index([tenantId, status])
   @@index([cycleId, employeeId])
   @@map("tax_overrides")
+}
+
+// Incentive scheme: a formula (sandboxed mathjs) over named values entered per person for a period, e.g. commission
+// "max(0, sales - target) * 0.05", a KPI bonus "score >= 100 ? 10000 : 0" or a milestone. A run creates nominations.
+model IncentiveScheme {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  kind      String // commission | kpi | milestone | other
+  formula   String
+  variables Json // [{ key, label }]
+  typeId    String // the incentive type it pays as
+  active    Boolean  @default(true)
+  createdBy String
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, name])
+  @@map("incentive_schemes")
+}
+
+// A manager's delegated budget for nominations in a period; alerts at 80% and 100% are sent once each
+model IncentiveBudget {
+  id                String    @id @default(uuid())
+  tenantId          String
+  managerEmployeeId String
+  periodStart       DateTime  @db.Date
+  periodEnd         DateTime  @db.Date
+  amount            Decimal   @db.Decimal(18, 2)
+  alerted80At       DateTime?
+  alerted100At      DateTime?
+  createdBy         String
+  createdAt         DateTime  @default(now())
+
+  @@unique([tenantId, managerEmployeeId, periodStart])
+  @@map("incentive_budgets")
+}
+
+// Company incentive settings: rating -> % of the variable pay suggested, and the kudos points scheme
+model IncentiveSettings {
+  tenantId           String  @id
+  ratingPayout       Json    @default("{}") // { "Exceeds expectations": 120, ... } in % of the period's variable pay
+  kudosPoints        Int     @default(10) // points each kudos gives
+  pointValue         Decimal @default(1) @db.Decimal(18, 4) // money per point when redeemed
+  pointsExpireMonths Int     @default(12)
+  minRedeem          Int     @default(100)
+
+  @@map("incentive_settings")
+}
+
+// Kudos points ledger: + earned from a kudos (expires), - redeemed (paid as an incentive)
+model KudosPoint {
+  id          String    @id @default(uuid())
+  tenantId    String
+  employeeId  String
+  points      Int
+  reason      String
+  kudosId     String?   @unique
+  incentiveId String?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, employeeId])
+  @@map("kudos_points")
+}
+
+// A file attached to a forum post; downloads go through a signed URL after checking the person may see the post
+model ForumAttachment {
+  id         String   @id @default(uuid())
+  tenantId   String
+  fileKey    String
+  fileName   String
+  mimeType   String
+  size       Int
+  uploadedBy String
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId])
+  @@map("forum_attachments")
+}
+
+// Following a tag, a person or a space: their new threads reach you and fill your "Following" feed
+model ForumFollow {
+  id        String   @id @default(uuid())
+  tenantId  String
+  userId    String
+  kind      String // tag | user | space
+  key       String
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, userId, kind, key])
+  @@index([tenantId, kind, key])
+  @@map("forum_follows")
+}
+
+// Company settings for Community: words that may not be posted, and whether policy/payroll news is posted for everyone
+model ForumSettings {
+  tenantId     String   @id
+  blockedWords String[] @default([])
+  autoNews     Boolean  @default(true)
+
+  @@map("forum_settings")
+}
+
+// Event calendar: townhalls, celebrations, trainings; people answer going / maybe / no
+model ForumEvent {
+  id          String    @id @default(uuid())
+  tenantId    String
+  title       String
+  description String    @default("")
+  kind        String    @default("townhall") // townhall | celebration | training | other
+  startsAt    DateTime
+  endsAt      DateTime?
+  location    String    @default("")
+  spaceId     String? // only that space's members see it; null = everyone
+  createdBy   String
+  cancelled   Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  rsvps ForumEventRsvp[]
+
+  @@index([tenantId, startsAt])
+  @@map("forum_events")
+}
+
+model ForumEventRsvp {
+  id      String @id @default(uuid())
+  eventId String
+  userId  String
+  status  String // going | maybe | no
+
+  event ForumEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@map("forum_event_rsvps")
+}
+
+// The period in which people may submit tax declarations for a year (set by Payroll). Everyone is told when it opens
+// and reminded 3 days before it closes (daily job declaration-window); outside it, submitting is refused.
+model TaxDeclarationWindow {
+  id          String    @id @default(uuid())
+  tenantId    String
+  year        Int
+  opensOn     DateTime  @db.Date
+  closesOn    DateTime  @db.Date
+  openedAt    DateTime? // "it is open" sent
+  remindedAt  DateTime? // "closes soon" sent
+  createdBy   String
+  createdAt   DateTime  @default(now())
+
+  @@unique([tenantId, year])
+  @@map("tax_declaration_windows")
+}
+
+// Annual tax certificates released to people for a year (they are told once)
+model TaxCertificateRelease {
+  id         String   @id @default(uuid())
+  tenantId   String
+  year       Int
+  basis      String   @default("calendar") // calendar | april
+  releasedBy String
+  releasedAt DateTime @default(now())
+  people     Int      @default(0)
+
+  @@unique([tenantId, year, basis])
+  @@map("tax_certificate_releases")
+}
+
+// A statutory return filed with the authority (outside the app until the filing adapters exist): the reference the
+// authority gave, who filed it and when
+model TaxFiling {
+  id        String   @id @default(uuid())
+  tenantId  String
+  cycleId   String
+  authority String // e.g. ZRA, NAPSA, NHIMA, KRA, FIRS, Income Tax Dept
+  reference String
+  filedOn   DateTime @db.Date
+  filedBy   String
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, cycleId, authority])
+  @@index([tenantId])
+  @@map("tax_filings")
 }
