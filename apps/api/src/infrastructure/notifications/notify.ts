@@ -1,9 +1,12 @@
+import nodemailer from 'nodemailer'
 import { prisma } from '../database/prisma'
 import { wants } from './preferences'
 import { pushEnabled, pushTo } from './push'
+import { templateFor, waVar, detailFor } from './whatsapp-templates'
 
 // In-app notification rows plus outbound delivery over pluggable transports.
-// Channels: NOTIFY_CHANNELS (default "email"). Email transport: EMAIL_TRANSPORT = log (default) | resend.
+// Channels: NOTIFY_CHANNELS (default "email"). Email transport: EMAIL_TRANSPORT = log (default) | smtp | resend.
+// SMTP (e.g. Mandrill): SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, SMTP_FROM.
 // WhatsApp is an adapter that needs WHATSAPP_TOKEN + WHATSAPP_PHONE_NUMBER_ID (Meta Cloud API) before it can send.
 
 export interface OutboundMessage {
@@ -11,6 +14,8 @@ export interface OutboundMessage {
   subject: string
   text: string
   attachments?: { filename: string; content: Buffer }[] // email only
+  type?: string // notification type: picks the WhatsApp template
+  link?: string | null // page in the app: the WhatsApp button opens it
 }
 
 export interface Transport {
@@ -22,6 +27,29 @@ export const logTransport: Transport = {
   name: 'log',
   async send(msg) {
     console.log(`[notify:email:log] to=${msg.to.email} subject="${msg.subject}"${msg.attachments?.length ? ` attachments=${msg.attachments.map((a) => a.filename).join(',')}` : ''}`)
+  },
+}
+
+// One pooled SMTP connection per process (Mandrill, or any SMTP relay)
+let smtp: ReturnType<typeof nodemailer.createTransport> | null = null
+export function smtpClient() {
+  const { SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS } = process.env
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) throw new Error('SMTP is not configured (SMTP_HOST, SMTP_USER, SMTP_PASS)')
+  smtp ??= nodemailer.createTransport({ host: SMTP_HOST, port: Number(SMTP_PORT) || 587, secure: SMTP_SECURE === 'true', auth: { user: SMTP_USER, pass: SMTP_PASS }, pool: true, maxConnections: 3 })
+  return smtp
+}
+export const smtpTransport: Transport = {
+  name: 'smtp',
+  async send(msg) {
+    if (!process.env.SMTP_FROM) throw new Error('SMTP_FROM is not set')
+    if (!msg.to.email) throw new Error('Recipient has no email address')
+    await smtpClient().sendMail({
+      from: { name: process.env.SMTP_FROM_NAME || 'MarichiHR', address: process.env.SMTP_FROM },
+      to: { name: msg.to.name, address: msg.to.email },
+      subject: msg.subject,
+      text: `${msg.text}\n\n— MarichiHR`,
+      ...(msg.attachments?.length && { attachments: msg.attachments.map((a) => ({ filename: a.filename, content: a.content })) }),
+    })
   },
 }
 
@@ -46,11 +74,23 @@ export const whatsappTransport: Transport = {
     const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID
     if (!token || !phoneId) throw new Error('WhatsApp is not configured (WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID)')
     if (!msg.to.phone) throw new Error('Recipient has no mobile number')
-    // ponytail: free-form text only reaches users inside the 24h service window; outside it Meta requires an approved template
+    // Business-started messages must use an approved template (whatsapp-templates.ts): {{1}} first name, {{2}} detail,
+    // and a URL button whose suffix is the page to open
+    const t = templateFor(msg.type ?? '')
+    const firstName = waVar(msg.to.name.split(' ')[0] || msg.to.name, 60)
     const res = await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messaging_product: 'whatsapp', to: msg.to.phone.replace(/[^\d]/g, ''), type: 'text', text: { body: `${msg.subject}\n${msg.text}` } }),
+      body: JSON.stringify({
+        messaging_product: 'whatsapp', to: msg.to.phone.replace(/[^\d]/g, ''), type: 'template',
+        template: {
+          name: t.name, language: { code: process.env.WHATSAPP_TEMPLATE_LANG || 'en' },
+          components: [
+            { type: 'body', parameters: [{ type: 'text', text: firstName }, { type: 'text', text: waVar(detailFor(msg.type ?? '', msg.subject)) }] },
+            { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: (msg.link ?? '/dashboard').replace(/^\//, '') || 'dashboard' }] },
+          ],
+        },
+      }),
     })
     if (!res.ok) throw new Error(`WhatsApp responded ${res.status}`)
   },
@@ -60,7 +100,7 @@ function transportsFor(): Record<string, Transport> {
   const channels = (process.env.NOTIFY_CHANNELS || 'email').split(',').map((c) => c.trim()).filter(Boolean)
   const out: Record<string, Transport> = {}
   for (const c of channels) {
-    if (c === 'email') out.email = process.env.EMAIL_TRANSPORT === 'resend' ? resendTransport : logTransport
+    if (c === 'email') out.email = process.env.EMAIL_TRANSPORT === 'smtp' ? smtpTransport : process.env.EMAIL_TRANSPORT === 'resend' ? resendTransport : logTransport
     if (c === 'whatsapp') out.whatsapp = whatsappTransport
   }
   return out
@@ -116,6 +156,8 @@ export async function notify(input: NotifyInput) {
         to: { name: user.fullName, email: user.email, phone: user.employee?.mobileWork || user.employee?.mobilePersonal },
         subject: input.title,
         text: input.body,
+        type: input.type,
+        link: input.link ?? null,
       }
       if (channel === 'email' && input.attachments) {
         try { attachments ??= await input.attachments(); msg.attachments = attachments } catch (err: any) { deliveries.push({ channel, transport: transport.name, status: 'attachment_failed', error: String(err?.message || err) }) }

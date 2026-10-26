@@ -1162,6 +1162,7 @@ model ExpenseCategory {
   maxAmount            Decimal? @db.Decimal(18, 2)
   enforceLimit         Boolean  @default(false)
   receiptRequiredAbove Decimal? @db.Decimal(18, 2)
+  digitaxItemId        String? // DigiTax item the category's purchases are recorded against (ZRA Smart Invoice)
   active               Boolean  @default(true)
   createdAt            DateTime @default(now())
 
@@ -1235,6 +1236,7 @@ model ReimbursementClaim {
   rejectedByUserId        String?
   paidInCycleId           String?
   paidAt                  DateTime?
+  digitax                 Json? // ZRA Smart Invoice purchase via DigiTax: { purchaseId, status, error, sentAt, supplierTin, supplierName, supplierInvoiceNumber }
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
 
@@ -2897,13 +2899,31 @@ model BankFileFormat {
   id        String   @id @default(uuid())
   tenantId  String
   name      String
-  kind      String   @default("delimited") // delimited | fixed
+  kind      String   @default("delimited") // delimited | fixed | pain001 (ISO 20022 XML)
   delimiter String   @default(",")
   header    Boolean  @default(true)
   columns   Json // [{ field, label, width?, align?, pad?, format? }]
+  vars      Json     @default("{}") // company values used by {tokens}: own account, corporate id, BIC...
+  preamble  String[] @default([]) // lines before the header/records, with {tokens}
+  trailer   String[] @default([]) // lines after the records, with {tokens}
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
 
   @@unique([tenantId, name])
   @@map("bank_file_formats")
+}
+
+// Accounting (ERP-agnostic): the company's own ledger accounts for the payroll journal, how to split it, and where to
+// push it. Any ERP takes the journal as CSV / JSON / XML / a ready import file, or by signed webhook.
+model AccountingSettings {
+  tenantId          String   @id
+  accounts          Json     @default("{}") // { SALARY_EXPENSE: { code, name }, NET_PAYABLE: {...}, ... }
+  deductionAccounts Json     @default("{}") // { <deduction code>: { code, name } } for deductions owed to someone else
+  splitBy           String   @default("none") // none | department | entity
+  webhookUrl        String?
+  webhookSecret     String? // HMAC key for X-MarichiHR-Signature; shown once
+  autoPush          Boolean  @default(false) // push the journal when a payroll is paid
+  updatedAt         DateTime @updatedAt
+
+  @@map("accounting_settings")
 }
