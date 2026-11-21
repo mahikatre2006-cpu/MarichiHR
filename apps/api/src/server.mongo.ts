@@ -16,10 +16,13 @@ async function main() {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
   await connectMongo()
   await syncMongoIndexes()
+  await require('./infrastructure/database/prisma.mongo').ensureEnabledModels()
   console.log('✓ MongoDB      : Connected')
   const { createApp } = await import('./app')
   const httpServer = createServer(createApp())
   httpServer.listen(PORT, () => console.log(`✓ API running at http://localhost:${PORT} (MongoDB)`))
+  if (process.env.EVENT_PUMP !== 'false') require('./infrastructure/events/pump.mongo').startEventPump()
+  if (process.env.JOBS_ENABLED === 'true') await require('./infrastructure/jobs/jobs').startJobs().catch((err: any) => console.error('✗ Jobs not started:', err.message))
 }
 
 main().catch((err) => { console.error('Failed to start server:', err); process.exit(1) })
