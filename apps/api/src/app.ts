@@ -31,7 +31,7 @@ import { taxRouter } from './modules/tax/tax.router'
 import { recruitmentRouter } from './modules/recruitment/recruitment.router'
 import { dashboardRouter } from './modules/dashboard/dashboard.router'
 import { authenticate } from './middleware/auth.middleware'
-import { requireModule } from './middleware/module.middleware'
+import { requireModule, requireFeature } from './middleware/module.middleware'
 import { automationRouter } from './modules/automation/automation.router'
 import { integrationApiRouter } from './modules/automation/integration-api.router'
 import { performanceRouter } from './modules/performance/performance.router'
@@ -77,6 +77,13 @@ export function createApp() {
 
   // MongoDB mode only: the few routes that sit inline in the Postgres routers (pay groups, legal entities, flexi check)
   if (process.env.DB_PROVIDER === 'mongo') app.use('/api/v1', require('./mongo-extras.router').mongoExtras)
+  // New apps built on MongoDB only (no Postgres version): helpdesk and timesheets
+  if (process.env.DB_PROVIDER === 'mongo') {
+    app.use('/api/v1/helpdesk', require('./modules/helpdesk/helpdesk.mongo.router').helpdeskRouter)
+    app.use('/api/v1/confirmation', require('./modules/employees/confirmation.mongo.router').confirmationRouter)
+    app.use('/api/v1/assistant', require('./modules/assistant/assistant.mongo.router').assistantRouter)
+    app.use('/api/v1/timesheets', require('./modules/timesheets/timesheets.mongo.router').timesheetsRouter)
+  }
 
   app.use('/api/v1/auth', authRouter)
   app.use('/api/v1/employees', employeeRouter)
@@ -101,6 +108,7 @@ export function createApp() {
   app.use('/api/v1/forums', forumsRouter)
   app.use('/api/v1/privacy', privacyRouter)
   app.use('/api/v1/performance', performanceRouter)
+  app.use(['/api/v1/automation/api-keys', '/api/v1/automation/webhooks', '/api/v1/automation/deliveries'], authenticate, requireFeature('api'))
   app.use('/api/v1/automation', automationRouter)
   app.use('/api/v1/integration', integrationApiRouter)
   app.use('/api/v1/approvals', approvalsRouter)
